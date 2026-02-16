@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Секретные данные (НИКОГДА НЕ КОММИТЬ!)
+.env
+.env.local
+*.env.local
+
+# Локальные данные
+history.json
+user_preferences.json
+knowledge_base_state.json
+confirmation_code.json
+hostile_responses_state.json
+random_comments_state.json
+
+# Логи
+*.log
+bot.log
+test_bot.log
+wget-log
+
+# Временные файлы
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Ngrok
+ngrok
+ngrok-v3-*
+*.tgz
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.kate-swp
+
+# Тестовые файлы
+test_*.py
