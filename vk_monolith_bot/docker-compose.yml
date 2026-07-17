@@ -1,0 +1,53 @@
+# Docker Compose для бота "Сота Сил"
+version: '3.8'
+
+services:
+  # Основное приложение бота
+  sota-bot:
+    build: .
+    container_name: sota-bot
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./user_preferences.json:/app/user_preferences.json
+      - ./history.json:/app/history.json
+    networks:
+      - sota-network
+    depends_on:
+      - redis
+
+  # Redis для кэширования (опционально)
+  redis:
+    image: redis:7-alpine
+    container_name: sota-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - sota-network
+
+  # Nginx как reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: sota-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs:/var/log/nginx
+    networks:
+      - sota-network
+    depends_on:
+      - sota-bot
+
+volumes:
+  redis_data:
+
+networks:
+  sota-network:
+    driver: bridge
