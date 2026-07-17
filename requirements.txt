@@ -18,3 +18,6 @@ structlog>=23.0.0
 
 # Безопасность
 cryptography>=41.0.0
+
+# Планировщик задач
+apscheduler>=3.10.0

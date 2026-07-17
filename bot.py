@@ -10,6 +10,7 @@ import logging
 import re
 import time
 from typing import Dict, Any, Optional
+from datetime import timezone, timedelta
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -26,6 +27,7 @@ from confirmation_manager import confirmation_manager
 from message_deduplicator import message_deduplicator
 from hostile_responses import hostile_response_manager
 from random_comments import random_comments_manager
+from birthday_checker import check_birthdays
 
 
 
@@ -598,6 +600,15 @@ async def main():
     # Запуск веб-сервера
     import os
     port = int(os.environ.get('PORT', 8000))
+    
+    # Запуск планировщика задач
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    
+    MSK_TZ = timezone(timedelta(hours=3))
+    scheduler = AsyncIOScheduler(timezone=MSK_TZ)
+    scheduler.add_job(check_birthdays, 'cron', hour=9, minute=0, id='birthday_check')
+    scheduler.start()
+    logger.info("⏰ Планировщик запущен: проверка дней рождения в 9:00 МСК")
     
     logger.info(f"🌐 Запуск веб-сервера на порту {port}...")
     logger.info("📝 Для настройки Callback API в ВКонтакте используйте URL: http://localhost:8000")
