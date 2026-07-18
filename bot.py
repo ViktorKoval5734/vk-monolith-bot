@@ -27,7 +27,7 @@ from confirmation_manager import confirmation_manager
 from message_deduplicator import message_deduplicator
 from hostile_responses import hostile_response_manager
 from random_comments import random_comments_manager
-from birthday_checker import check_birthdays
+from birthday_checker import check_birthdays, get_todays_birthdays_message
 
 
 
@@ -407,6 +407,13 @@ async def handle_message(message: Dict):
         logger.info(f"🔧 Показан список команд настройки")
         # Отправляем список команд
         await send_message(user_id, message.get("peer_id"), commands_list)
+        return
+
+    # Проверяем команду дней рождения ("др")
+    if re.search(r'\bдр\b', clean_text, re.IGNORECASE):
+        logger.info(f"🎂 Обработана команда 'др'")
+        birthday_message = await get_todays_birthdays_message()
+        await send_message(user_id, message.get("peer_id"), birthday_message)
         return
 
     # Проверяем на агрессивные сообщения
