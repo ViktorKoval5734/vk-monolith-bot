@@ -22,10 +22,8 @@ async def _get_group_chat_peer_id() -> int:
     params = {
         "access_token": VK_TOKEN,
         "v": VK_API_VERSION,
-        "group_id": VK_GROUP_ID,
-        "filter": "groups",
+        "filter": "chats",
         "count": 50,
-        "offset": 0
     }
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -38,10 +36,13 @@ async def _get_group_chat_peer_id() -> int:
                 return None
             if "response" in data and "items" in data["response"]:
                 items = data["response"]["items"]
-                if items:
-                    peer_id = items[0].get("peer", {}).get("id")
-                    logger.info(f"📋 Найдено {len(items)} бесед, берём peer_id={peer_id}")
-                    return peer_id
+                # Ищем беседу (peer_id > 2000000000)
+                for item in items:
+                    peer = item.get("peer", {})
+                    if peer.get("id", 0) > 2000000000:
+                        peer_id = peer.get("id")
+                        logger.info(f"📋 Найдено {len(items)} бесед, берём peer_id={peer_id}")
+                        return peer_id
     return None
 
 
