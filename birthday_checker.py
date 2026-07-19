@@ -47,7 +47,8 @@ async def _get_group_chat_peer_id() -> int:
 
 async def _get_group_members() -> list:
     """Получить список всех участников группы с датами рождения"""
-    all_members = []
+    # Сначала получаем список всех user_ids
+    all_user_ids = []
     offset = 0
     count = 1000
 
@@ -56,7 +57,6 @@ async def _get_group_members() -> list:
             "access_token": VK_TOKEN,
             "v": VK_API_VERSION,
             "group_id": VK_GROUP_ID,
-            "fields": "bdate",
             "offset": offset,
             "count": count
         }
@@ -78,38 +78,63 @@ async def _get_group_members() -> list:
                         members = response_data
                         total = len(members)
 
-                    all_members.extend(members)
-                    logger.info(f"👥 Получено {len(all_members)} участников (из {total})")
+                    all_user_ids.extend(members)
+                    logger.info(f"👥 Получено {len(all_user_ids)} участников (из {total})")
 
-                    if len(all_members) >= total:
+                    if len(all_user_ids) >= total:
                         break
                     offset += count
                 else:
                     break
 
-    return all_members
+    if not all_user_ids:
+        return []
 
+    # Теперь получаем даты рождения и имена через users.get (batch запрос)
+    # users.get принимает до 250 user_ids в одном запросе
+    all_members_with_bdate = []
+    batch_size = 250
+    
+    for i in range(0, len(all_user_ids), batch_size):
+        batch_ids = all_user_ids[i:i + batch_size]
+        params = {
+            "user_ids": ",".join(str(uid["id"] if isinstance(uid, dict) else uid) for uid in batch_ids),
+            "access_token": VK_TOKEN,
+            "v": VK_API_VERSION,
+            "fields": "bdate,first_name,last_name"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{VK_API_URL}users.get",
+                params=params
+            ) as response:
+                data = await response.json()
+                if "error" in data:
+                    logger.error(f"Ошибка получения пользователей: {data['error']}")
+                    continue
+                if "response" in data:
+                    users = data["response"]
+                    for user in users:
+                        user_id = user.get("id")
+                        # Находим соответствующий элемент в all_user_ids
+                        member = next((m for m in all_user_ids if (m.get("id") if isinstance(m, dict) else m) == user_id), None)
+                        if member:
+                            # Добавляем bdate и имена к существующему элементу
+                            member["bdate"] = user.get("bdate")
+                            member["first_name"] = user.get("first_name", "")
+                            member["last_name"] = user.get("last_name", "")
+                            all_members_with_bdate.append(member)
+                        else:
+                            # Если элемент не найден, создаём новый
+                            all_members_with_bdate.append({
+                                "id": user_id,
+                                "bdate": user.get("bdate"),
+                                "first_name": user.get("first_name", ""),
+                                "last_name": user.get("last_name", "")
+                            })
 
-async def _get_users_info(user_ids: list) -> list:
-    """Получить имена пользователей по ID"""
-    params = {
-        "user_ids": ",".join(str(uid) for uid in user_ids),
-        "access_token": VK_TOKEN,
-        "v": VK_API_VERSION,
-        "fields": "first_name,last_name"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{VK_API_URL}users.get",
-            params=params
-        ) as response:
-            data = await response.json()
-            if "error" in data:
-                logger.error(f"Ошибка получения пользователей: {data['error']}")
-                return []
-            if "response" in data:
-                return data["response"]
-    return []
+    logger.info(f"👥 Итого участников с данными: {len(all_members_with_bdate)}")
+    return all_members_with_bdate
 
 
 async def _send_message(peer_id: int, message: str) -> bool:
@@ -169,18 +194,9 @@ async def get_todays_birthdays_message() -> str:
     if not users_with_bdate:
         return "Монолит не обнаружил в Зоне сталкеров с известными датами рождения."
 
-    # Получаем полные имена для пользователей с bdate
-    user_ids = [m["id"] for m in users_with_bdate]
-    users_info = await _get_users_info(user_ids)
-
     # Ищем именинников
     birthday_people = []
-    for user in users_info:
-        user_id = user.get("id")
-        member = next((m for m in users_with_bdate if m["id"] == user_id), None)
-        if not member:
-            continue
-
+    for member in users_with_bdate:
         bdate = member.get("bdate")
         if not bdate:
             continue
@@ -189,11 +205,11 @@ async def get_todays_birthdays_message() -> str:
         if parsed:
             day, month = parsed
             if day == today_day and month == today_month:
-                first_name = user.get("first_name", "")
-                last_name = user.get("last_name", "")
+                first_name = member.get("first_name", "")
+                last_name = member.get("last_name", "")
                 name = f"{first_name} {last_name}".strip() or "Сталкер"
                 birthday_people.append({
-                    "id": user_id,
+                    "id": member["id"],
                     "name": name
                 })
 
@@ -238,18 +254,9 @@ async def check_birthdays():
         logger.info("🔍 У участников нет дат рождения")
         return
 
-    # Получаем полные имена для пользователей с bdate
-    user_ids = [m["id"] for m in users_with_bdate]
-    users_info = await _get_users_info(user_ids)
-
     # Ищем именинников
     birthday_people = []
-    for user in users_info:
-        user_id = user.get("id")
-        member = next((m for m in users_with_bdate if m["id"] == user_id), None)
-        if not member:
-            continue
-
+    for member in users_with_bdate:
         bdate = member.get("bdate")
         if not bdate:
             continue
@@ -258,11 +265,11 @@ async def check_birthdays():
         if parsed:
             day, month = parsed
             if day == today_day and month == today_month:
-                first_name = user.get("first_name", "")
-                last_name = user.get("last_name", "")
+                first_name = member.get("first_name", "")
+                last_name = member.get("last_name", "")
                 name = f"{first_name} {last_name}".strip() or "Сталкер"
                 birthday_people.append({
-                    "id": user_id,
+                    "id": member["id"],
                     "name": name
                 })
 
