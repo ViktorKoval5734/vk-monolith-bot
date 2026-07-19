@@ -3,6 +3,7 @@
 Запускается ежедневно в 9:00 по МСК
 """
 import logging
+import asyncio
 import aiohttp
 import re
 from datetime import datetime, timezone, timedelta
@@ -17,46 +18,9 @@ MSK_TZ = timezone(timedelta(hours=3))
 BIRTHDAY_TEMPLATE = "Сегодня в Зоне празднуют День Рождения! Сталкеры, поздравьте же братьев, что очередной год делят с вами консервы и патроны! {mentions}, с праздником!!!"
 
 
-async def _get_group_chat_peer_id() -> int:
-    """Получить peer_id группового чата сообщества"""
-    params = {
-        "access_token": VK_TOKEN,
-        "v": VK_API_VERSION,
-        "count": 50,
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{VK_API_URL}messages.getConversations",
-            params=params
-        ) as response:
-            data = await response.json()
-            if "error" in data:
-                logger.error(f"Ошибка получения бесед: {data['error']}")
-                return None
-            if "response" in data and "items" in data["response"]:
-                items = data["response"]["items"]
-                logger.info(f"📋 Найдено {len(items)} бесед/чатов")
-                # Ищем беседу (peer_id > 2000000000)
-                for item in items:
-                    peer = item.get("peer", {})
-                    peer_id = peer.get("id")
-                    logger.info(f"   🔍 Проверяю peer_id={peer_id}")
-                    if peer_id and peer_id > 2000000000:
-                        logger.info(f"✅ Найдена беседа: peer_id={peer_id}")
-                        return peer_id
-                logger.warning("⚠️ Беседы не найдены среди доступных чатов")
-    return None
-
-
 async def _get_group_members() -> list:
-    """Получить список всех участников беседы с датами рождения"""
-    # Получаем peer_id группового чата
-    peer_id = await _get_group_chat_peer_id()
-    if not peer_id:
-        logger.warning("⚠️ Не удалось получить peer_id беседы")
-        return []
-
-    # Получаем список участников беседы
+    """Получить список всех участников группы с датами рождения"""
+    # Получаем список всех user_ids
     all_user_ids = []
     offset = 0
     count = 1000
@@ -65,34 +29,30 @@ async def _get_group_members() -> list:
         params = {
             "access_token": VK_TOKEN,
             "v": VK_API_VERSION,
-            "peer_id": peer_id,
+            "group_id": VK_GROUP_ID,
             "offset": offset,
             "count": count
         }
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{VK_API_URL}messages.getConversationMembers",
+                f"{VK_API_URL}groups.getMembers",
                 params=params
             ) as response:
                 data = await response.json()
                 if "error" in data:
-                    logger.error(f"Ошибка получения участников беседы: {data['error']}")
+                    logger.error(f"Ошибка получения участников группы: {data['error']}")
                     return []
                 if "response" in data:
                     response_data = data["response"]
                     if isinstance(response_data, dict):
-                        members = response_data.get("members", [])
+                        members = response_data.get("items", [])
                         total = response_data.get("count", len(members))
                     else:
                         members = response_data
                         total = len(members)
 
-                    for member in members:
-                        user_id = member.get("member_id")
-                        if user_id and user_id > 0:  # Только пользователи, не группы
-                            all_user_ids.append({"id": user_id})
-                    
-                    logger.info(f"👥 Получено {len(all_user_ids)} участников беседы (из {total})")
+                    all_user_ids.extend(members)
+                    logger.info(f"👥 Получено {len(all_user_ids)} участников группы (из {total})")
 
                     if len(all_user_ids) >= total:
                         break
@@ -101,18 +61,19 @@ async def _get_group_members() -> list:
                     break
 
     if not all_user_ids:
-        logger.warning("⚠️ Не удалось получить участников беседы")
+        logger.warning("⚠️ Не удалось получить участников группы")
         return []
 
     # Теперь получаем даты рождения и имена через users.get (batch запрос)
     # users.get принимает до 250 user_ids в одном запросе
+    # Rate limit: 3 запроса в секунду для токена сообщества
     all_members_with_bdate = []
     batch_size = 250
     
     for i in range(0, len(all_user_ids), batch_size):
         batch_ids = all_user_ids[i:i + batch_size]
         params = {
-            "user_ids": ",".join(str(uid["id"]) for uid in batch_ids),
+            "user_ids": ",".join(str(uid["id"] if isinstance(uid, dict) else uid) for uid in batch_ids),
             "access_token": VK_TOKEN,
             "v": VK_API_VERSION,
             "fields": "bdate,first_name,last_name"
@@ -131,7 +92,7 @@ async def _get_group_members() -> list:
                     for user in users:
                         user_id = user.get("id")
                         # Находим соответствующий элемент в all_user_ids
-                        member = next((m for m in all_user_ids if m["id"] == user_id), None)
+                        member = next((m for m in all_user_ids if (m.get("id") if isinstance(m, dict) else m) == user_id), None)
                         if member:
                             # Добавляем bdate и имена к существующему элементу
                             member["bdate"] = user.get("bdate")
@@ -147,7 +108,17 @@ async def _get_group_members() -> list:
                                 "last_name": user.get("last_name", "")
                             })
 
-    logger.info(f"👥 Итого участников беседы с данными: {len(all_members_with_bdate)}")
+        # Rate limiting: 3 запроса в секунду
+        if i + batch_size < len(all_user_ids):
+            await asyncio.sleep(0.34)
+
+    # Статистика
+    with_bdate = [m for m in all_members_with_bdate if m.get("bdate")]
+    without_bdate = [m for m in all_members_with_bdate if not m.get("bdate")]
+    logger.info(f"👥 Итого участников с данными: {len(all_members_with_bdate)}")
+    logger.info(f"📅 С датами рождения: {len(with_bdate)}, без дат: {len(without_bdate)}")
+    if without_bdate:
+        logger.info(f"⚠️ Участники без bdate: {[m.get('first_name', '?') for m in without_bdate[:10]]}")
     return all_members_with_bdate
 
 
@@ -248,8 +219,47 @@ async def check_birthdays():
 
     logger.info(f"🎂 Ежедневная проверка дней рождения на {today_day}.{today_month:02d}...")
 
-    # Получаем peer_id группового чата
-    peer_id = await _get_group_chat_peer_id()
+    # Получаем peer_id группового чата через searchChats
+    peer_id = None
+    
+    # Получаем название группы
+    async with aiohttp.ClientSession() as session:
+        params = {
+            "access_token": VK_TOKEN,
+            "v": VK_API_VERSION,
+            "group_ids": VK_GROUP_ID,
+        }
+        async with session.get(
+            f"{VK_API_URL}groups.getById",
+            params=params
+        ) as response:
+            data = await response.json()
+            if "response" in data and data["response"]:
+                group_name = data["response"][0].get("name", "")
+                logger.info(f"📋 Название группы: {group_name}")
+                
+                # Ищем беседу по названию группы
+                params = {
+                    "access_token": VK_TOKEN,
+                    "v": VK_API_VERSION,
+                    "q": group_name,
+                    "count": 10,
+                }
+                async with session.get(
+                    f"{VK_API_URL}messages.searchChats",
+                    params=params
+                ) as response:
+                    data = await response.json()
+                    if "response" in data:
+                        chats = data["response"]
+                        logger.info(f"🔍 Найдено бесед по названию: {len(chats)}")
+                        for chat in chats:
+                            chat_id = chat.get("chat_id")
+                            if chat_id:
+                                peer_id = chat_id + 2000000000  # Конвертируем chat_id в peer_id
+                                logger.info(f"✅ Найдена беседа: peer_id={peer_id}, name={chat.get('name')}")
+                                break
+
     if not peer_id:
         logger.warning("⚠️ Не удалось найти групповой чат. Проверьте, что бот состоит в беседе.")
         return
