@@ -18,50 +18,99 @@ MSK_TZ = timezone(timedelta(hours=3))
 BIRTHDAY_TEMPLATE = "Сегодня в Зоне празднуют День Рождения! Сталкеры, поздравьте же братьев, что очередной год делят с вами консервы и патроны! {mentions}, с праздником!!!"
 
 
-async def _get_group_members() -> list:
-    """Получить список всех участников группы с датами рождения"""
-    # Получаем список всех user_ids
+async def _get_group_members(peer_id: int = None) -> list:
+    """Получить список всех участников беседы с датами рождения
+    
+    Args:
+        peer_id: ID беседы. Если не указан, используется групповой чат.
+    """
     all_user_ids = []
-    offset = 0
-    count = 1000
+    
+    # Если указан peer_id, используем getConversationMembers
+    if peer_id and peer_id > 2000000000:
+        offset = 0
+        count = 1000
 
-    while True:
-        params = {
-            "access_token": VK_TOKEN,
-            "v": VK_API_VERSION,
-            "group_id": VK_GROUP_ID,
-            "offset": offset,
-            "count": count
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{VK_API_URL}groups.getMembers",
-                params=params
-            ) as response:
-                data = await response.json()
-                if "error" in data:
-                    logger.error(f"Ошибка получения участников группы: {data['error']}")
-                    return []
-                if "response" in data:
-                    response_data = data["response"]
-                    if isinstance(response_data, dict):
-                        members = response_data.get("items", [])
-                        total = response_data.get("count", len(members))
-                    else:
-                        members = response_data
-                        total = len(members)
-
-                    all_user_ids.extend(members)
-                    logger.info(f"👥 Получено {len(all_user_ids)} участников группы (из {total})")
-
-                    if len(all_user_ids) >= total:
+        while True:
+            params = {
+                "access_token": VK_TOKEN,
+                "v": VK_API_VERSION,
+                "peer_id": peer_id,
+                "offset": offset,
+                "count": count
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{VK_API_URL}messages.getConversationMembers",
+                    params=params
+                ) as response:
+                    data = await response.json()
+                    if "error" in data:
+                        logger.error(f"Ошибка получения участников беседы: {data['error']}")
                         break
-                    offset += count
-                else:
-                    break
+                    if "response" in data:
+                        response_data = data["response"]
+                        if isinstance(response_data, dict):
+                            members = response_data.get("members", [])
+                            total = response_data.get("count", len(members))
+                        else:
+                            members = response_data
+                            total = len(members)
+
+                        for member in members:
+                            user_id = member.get("member_id")
+                            if user_id and user_id > 0:
+                                all_user_ids.append({"id": user_id})
+                        
+                        logger.info(f"👥 Получено {len(all_user_ids)} участников беседы (из {total})")
+
+                        if len(all_user_ids) >= total:
+                            break
+                        offset += count
+                    else:
+                        break
+    else:
+        # Fallback: используем groups.getMembers
+        offset = 0
+        count = 1000
+
+        while True:
+            params = {
+                "access_token": VK_TOKEN,
+                "v": VK_API_VERSION,
+                "group_id": VK_GROUP_ID,
+                "offset": offset,
+                "count": count
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{VK_API_URL}groups.getMembers",
+                    params=params
+                ) as response:
+                    data = await response.json()
+                    if "error" in data:
+                        logger.error(f"Ошибка получения участников группы: {data['error']}")
+                        break
+                    if "response" in data:
+                        response_data = data["response"]
+                        if isinstance(response_data, dict):
+                            members = response_data.get("items", [])
+                            total = response_data.get("count", len(members))
+                        else:
+                            members = response_data
+                            total = len(members)
+
+                        all_user_ids.extend(members)
+                        logger.info(f"👥 Получено {len(all_user_ids)} участников группы (из {total})")
+
+                        if len(all_user_ids) >= total:
+                            break
+                        offset += count
+                    else:
+                        break
 
     if not all_user_ids:
-        logger.warning("⚠️ Не удалось получить участников группы")
+        logger.warning("⚠️ Не удалось получить участников")
         return []
 
     # groups.getMembers возвращает список ID (int), преобразуем в список словарей
@@ -160,10 +209,13 @@ def _parse_bdate(bdate: str) -> tuple:
     return None
 
 
-async def get_todays_birthdays_message() -> str:
+async def get_todays_birthdays_message(peer_id: int = None) -> str:
     """
     Получить текст поздравления с днями рождения на сегодня.
     Возвращает текст поздравления или сообщение об отсутствии именинников.
+    
+    Args:
+        peer_id: ID беседы для получения участников. Если не указан, используется группа.
     """
     now = datetime.now(MSK_TZ)
     today_day = now.day
@@ -171,8 +223,8 @@ async def get_todays_birthdays_message() -> str:
 
     logger.info(f"🎂 Ручная проверка дней рождения на {today_day}.{today_month:02d}...")
 
-    # Получаем участников группы
-    members = await _get_group_members()
+    # Получаем участников группы/беседы
+    members = await _get_group_members(peer_id)
     if not members:
         return "Монолит не смог получить список участников Зоны..."
 
@@ -269,7 +321,7 @@ async def check_birthdays():
         return
 
     # Получаем участников группы
-    members = await _get_group_members()
+    members = await _get_group_members(peer_id)
     if not members:
         logger.warning("⚠️ Не удалось получить участников группы")
         return

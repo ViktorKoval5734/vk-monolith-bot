@@ -412,7 +412,7 @@ async def handle_message(message: Dict):
     # Проверяем команду дней рождения ("др")
     if re.search(r'\bдр\b', clean_text, re.IGNORECASE):
         logger.info(f"🎂 Обработана команда 'др'")
-        birthday_message = await get_todays_birthdays_message()
+        birthday_message = await get_todays_birthdays_message(message.get("peer_id"))
         await send_message(user_id, message.get("peer_id"), birthday_message)
         return
 
