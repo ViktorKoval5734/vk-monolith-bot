@@ -618,21 +618,7 @@ async def main():
 
 if __name__ == "__main__":
     import os
-    import uvicorn
     port = int(os.environ.get('PORT', 8000))
     
-    # Запуск планировщика задач — всегда, независимо от платформы
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    
-    MSK_TZ = timezone(timedelta(hours=3))
-    scheduler = AsyncIOScheduler(timezone=MSK_TZ)
-    scheduler.add_job(check_birthdays, 'cron', hour=9, minute=0, id='birthday_check')
-    scheduler.start()
-    logger.info("⏰ Планировщик запущен: проверка дней рождения в 9:00 МСК")
-    
-    if os.environ.get('RENDER'):
-        # Для Render.com
-        uvicorn.run(app, host="0.0.0.0", port=port)
-    else:
-        # Для локального запуска
-        asyncio.run(main())
+    # Всегда запускаем через asyncio.run() — это создаёт event loop для планировщика
+    asyncio.run(main())
