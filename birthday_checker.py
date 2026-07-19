@@ -64,6 +64,10 @@ async def _get_group_members() -> list:
         logger.warning("⚠️ Не удалось получить участников группы")
         return []
 
+    # groups.getMembers возвращает список ID (int), преобразуем в список словарей
+    if isinstance(all_user_ids[0], int):
+        all_user_ids = [{"id": uid} for uid in all_user_ids]
+
     # Теперь получаем даты рождения и имена через users.get (batch запрос)
     # users.get принимает до 250 user_ids в одном запросе
     # Rate limit: 3 запроса в секунду для токена сообщества
